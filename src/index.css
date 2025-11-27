@@ -1,0 +1,8 @@
+/* Vite 기본 index.css를 쓰고 있다면, 아주 간단하게 정리만 해두면 됩니다. */
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+}
