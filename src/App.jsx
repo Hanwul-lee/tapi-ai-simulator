@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 
+// 백엔드 주소 (로컬 기본값 + 배포 시 환경변수 사용)
+const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
 // -----------------------------
 // 1. 시뮬레이션 기본 데이터
 // -----------------------------
@@ -28,12 +32,6 @@ const TOPICS = [
 ];
 
 // Step2: 팀원 페르소나 (백엔드 persona 키와 연결)
-//  - name: 유형 이름 (요약 패널에 사용)
-//  - displayName: 가상의 인물 이름
-//  - position: 직무/연차
-//  - avatar: 간단한 이모지 아바타 (이미지처럼 사용)
-//  - tagline: 한 줄 속마음
-//  - tags, description: 카드 내 설명
 const PERSONAS = [
   {
     id: 'quiet',
@@ -185,6 +183,8 @@ function App() {
 
   // Step6: 분석 결과
   const [analysis, setAnalysis] = useState(null);
+  const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
 
   // 테마 변경 시 html data-theme 변경
   useEffect(() => {
@@ -237,6 +237,7 @@ function App() {
     setChatInput('');
     setChatHistory([]);
     setAnalysis(null);
+    setAnalysisError(null);
   };
 
   // -----------------------------
@@ -247,6 +248,11 @@ function App() {
     const trimmed = chatInput.trim();
     if (!trimmed) return;
 
+    if (!selectedTopic || !selectedPersona || !selectedSituation) {
+      alert('주제, 팀원 페르소나, 상황을 먼저 선택해 주세요.');
+      return;
+    }
+
     // 리더 메시지 추가
     const newHistory = [
       ...chatHistory,
@@ -256,30 +262,61 @@ function App() {
     setChatInput('');
     setIsChatLoading(true);
 
-    // 백엔드 메시지 구성
+    const personaName = selectedPersona.displayName;
+    const personaType = selectedPersona.name;
+    const topicLabel = selectedTopic.label;
+    const situationTitle = selectedSituation.title;
+
+    // 이전 대화 로그 (현재 발화 직전까지)
+    const historyLines =
+      chatHistory.length === 0
+        ? '이전 대화는 아직 없습니다.'
+        : chatHistory
+            .map((m) =>
+              m.from === 'leader'
+                ? `팀장: ${m.text}`
+                : `팀원: ${m.text}`,
+            )
+            .join('\n');
+
+    // 프롬프트 (백엔드에서 Gemini/OpenAI 등 공통 사용 가능)
     const contextMessage = `
-[회사] ${COMPANY_ID}
-[주제] ${selectedTopic?.label || '-'}
-[팀원 페르소나] ${selectedPersona?.name || '-'} (${selectedPersona?.displayName || '-'})
-[상황] ${selectedSituation?.title || '-'}
+당신은 가상의 팀원 "${personaName}"입니다. (${personaType})
+아래는 당신과 팀장이 처한 상황입니다.
 
-[면담 아젠다 메모]
-${agenda || '(작성되지 않음)'}
+- 회사: ${COMPANY_ID}
+- 리더십 주제: ${topicLabel}
+- 현재 상황: ${situationTitle}
+- 팀장이 메모한 면담 아젠다: ${agenda || '별도 메모 없음'}
 
-[리더의 발화]
-${trimmed}
+[지금까지의 대화 로그]
+${historyLines}
 
-위 정보를 바탕으로, 선택된 팀원 페르소나의 입장에서 자연스럽게 답해 주세요.
-실제 팀원이 대화하듯이 말하고, 한 번에 3~5문장 정도로만 답해 주세요.
-`;
+지금부터 팀장은 계속해서 당신과 대화하고 있습니다.
+바로 직전에 팀장이 이렇게 말했습니다.
+
+[팀장의 가장 최근 말]
+"${trimmed}"
+
+위의 설명은 모두 참고용 정보일 뿐이며,
+절대 그대로 반복하거나 요약해서 말하지 마세요.
+
+당신은 실제 팀원처럼,
+- 자연스러운 한국어 존댓말로,
+- 2~4문장 안에서,
+- 당신의 감정과 생각을 담아
+
+"팀장의 방금 한 말에 이어서 하는 당신의 대답"만 말해 주세요.
+AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요.
+    `;
 
     try {
-      const res = await fetch('http://localhost:8000/chat', {
+      const res = await fetch(`${BACKEND_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: contextMessage,
-          persona: selectedPersona?.id || 'quiet',
+          persona: selectedPersona.id || 'quiet',
           simulation_id: null,
         }),
       });
@@ -316,29 +353,123 @@ ${trimmed}
   };
 
   // -----------------------------
-  // 3-3. 분석 생성 (Step6 진입 시)
+  // 3-3. 분석 생성 (Step6 진입 시, Gemini 리포트 호출)
   // -----------------------------
   useEffect(() => {
-    if (step === 6) {
-      const lastUser = [...chatHistory]
-        .reverse()
-        .find((m) => m.from === 'leader');
-      const lastCoach = [...chatHistory]
-        .reverse()
-        .find((m) => m.from === 'coach');
+    const shouldGenerateReport =
+      step === 6 &&
+      selectedTopic &&
+      selectedPersona &&
+      selectedSituation &&
+      chatHistory.length > 0;
 
-      const a = createLocalAnalysis({
-        topic: selectedTopic,
-        persona: selectedPersona,
-        situation: selectedSituation,
-        agenda,
-        lastUserMessage: lastUser?.text || '',
-        lastCoachReply: lastCoach?.text || '',
-      });
-      setAnalysis(a);
+    if (!shouldGenerateReport) {
+      // 조건이 안 되면 리포트 초기화
+      if (step === 6) {
+        setAnalysis(null);
+        setAnalysisError(null);
+      }
+      return;
     }
+
+    const fetchReport = async () => {
+      setIsAnalysisLoading(true);
+      setAnalysisError(null);
+
+      try {
+        // 마지막 유저/코치 메시지 추출 (fallback용 / 백엔드 참고용)
+        const lastUser = [...chatHistory]
+          .reverse()
+          .find((m) => m.from === 'leader');
+        const lastCoach = [...chatHistory]
+          .reverse()
+          .find((m) => m.from === 'coach');
+
+        // 백엔드로 보낼 payload
+        const payload = {
+          company_id: COMPANY_ID,
+          topic: {
+            id: selectedTopic.id,
+            label: selectedTopic.label,
+          },
+          persona: {
+            id: selectedPersona.id,
+            name: selectedPersona.name,
+            displayName: selectedPersona.displayName,
+          },
+          situation: {
+            id: selectedSituation.id,
+            title: selectedSituation.title,
+          },
+          agenda,
+          chatHistory: chatHistory.map((m) => ({
+            role: m.from === 'leader' ? 'leader' : 'member',
+            text: m.text,
+            time: m.time,
+          })),
+          lastUserMessage: lastUser?.text || '',
+          lastCoachReply: lastCoach?.text || '',
+        };
+
+        const res = await fetch(`${BACKEND_URL}/report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          throw new Error('리포트 백엔드 응답 오류');
+        }
+
+        const data = await res.json();
+        // 백엔드에서 Gemini로 생성한 결과를 기준으로 세팅
+        // 기대 포맷: { summary, strengths, improvements, coachNote }
+        const newAnalysis = {
+          summary:
+            data.summary ||
+            `「${selectedTopic.label}」 주제에서 「${selectedSituation.title}」 상황을 선택한 시뮬레이션입니다.`,
+          strengths: Array.isArray(data.strengths)
+            ? data.strengths
+            : ['구성원의 입장과 감정을 이해하려는 노력이 보였습니다.'],
+          improvements: Array.isArray(data.improvements)
+            ? data.improvements
+            : ['다음 대화를 위해 구체적인 질문을 2~3개 더 정리해보면 좋겠습니다.'],
+          coachNote:
+            data.coachNote ||
+            data.comment ||
+            '이번 대화를 돌아보며, 실제 면담에서 바로 써볼 수 있는 문장을 3~5개 정도 적어보세요.',
+        };
+
+        setAnalysis(newAnalysis);
+      } catch (error) {
+        console.error('Report 생성 중 오류:', error);
+        setAnalysisError('리포트를 생성하는 중 오류가 발생했습니다. 기본 코멘트로 대체합니다.');
+
+        // 🔁 백업: 로컬 분석으로 대체
+        const lastUser = [...chatHistory]
+          .reverse()
+          .find((m) => m.from === 'leader');
+        const lastCoach = [...chatHistory]
+          .reverse()
+          .find((m) => m.from === 'coach');
+
+        const fallback = createLocalAnalysis({
+          topic: selectedTopic,
+          persona: selectedPersona,
+          situation: selectedSituation,
+          agenda,
+          lastUserMessage: lastUser?.text || '',
+          lastCoachReply: lastCoach?.text || '',
+        });
+        setAnalysis(fallback);
+      } finally {
+        setIsAnalysisLoading(false);
+      }
+    };
+
+    fetchReport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [step, selectedTopic, selectedPersona, selectedSituation, agenda, chatHistory]);
 
   // -----------------------------
   // 4. 렌더링
@@ -356,7 +487,9 @@ ${trimmed}
         </div>
 
         <div className="header-right">
-          <span className="step-badge">Step {step === 0 ? '0' : `${step}/6`}</span>
+          <span className="step-badge">
+            Step {step === 0 ? '0' : `${step}/6`}
+          </span>
           <button
             type="button"
             className="theme-toggle-btn"
@@ -377,8 +510,8 @@ ${trimmed}
               <h2>AI 시뮬레이션 시작</h2>
               <p className="intro-text">
                 6단계 흐름을 따라가며{' '}
-                <strong>“리더로서 직면한 상황에서 나는 어떻게 말하고 행동할 것인가?”</strong>를
-                연습해 보세요.
+                <strong>“리더로서 직면한 상황에서 나는 어떻게 말하고 행동할 것인가?”</strong>
+                를 연습해 보세요.
               </p>
               <ol className="intro-steps">
                 <li>주제를 선택합니다. (리더 역할 이해 / 리더의 커뮤니케이션 / 성과평가 면담 )</li>
@@ -547,6 +680,23 @@ ${trimmed}
                 이후에는 상황에 따라 여러 번 주고받으며 연습할 수 있습니다.
               </p>
 
+              {/* 현재 설정 요약 (Step 5 전용) */}
+              <div className="chat-context-summary">
+                <div>
+                  <strong>주제</strong> : {selectedTopic ? selectedTopic.label : '미선택'}
+                </div>
+                <div>
+                  <strong>상황</strong> :{' '}
+                  {selectedSituation ? selectedSituation.title : '미선택'}
+                </div>
+                <div>
+                  <strong>팀원</strong> :{' '}
+                  {selectedPersona
+                    ? `${selectedPersona.displayName} (${selectedPersona.name})`
+                    : '미선택'}
+                </div>
+              </div>
+
               <div className="chat-box">
                 <div className="chat-history">
                   {chatHistory.length === 0 && (
@@ -598,16 +748,41 @@ ${trimmed}
             </div>
           )}
 
-          {/* Step 6: 피드백 리포트 */}
+          {/* Step 6: 피드백 리포트 (Gemini 결과 사용) */}
           {step === 6 && (
             <div className="card">
               <h2>STEP 6. 피드백 리포트</h2>
-              {!analysis && (
+
+              {/* 조건 미충족 (대화 안 한 경우 등) */}
+              {(!selectedTopic || !selectedPersona || !selectedSituation || chatHistory.length === 0) && (
                 <p className="step-desc">
-                  먼저 5단계에서 최소 한 번 이상 시뮬레이션 채팅을 진행해 주세요.
+                  리포트를 생성하려면 1~5단계를 먼저 완료하고, 최소 한 번 이상 시뮬레이션
+                  채팅을 진행해 주세요.
                 </p>
               )}
-              {analysis && (
+
+              {/* 로딩 중 */}
+              {selectedTopic &&
+                selectedPersona &&
+                selectedSituation &&
+                chatHistory.length > 0 &&
+                isAnalysisLoading && (
+                  <p className="step-desc">
+                    리더십 코치 관점에서 피드백 리포트를 생성하는 중입니다…
+                    <br />
+                    (대화 내용과 아젠다를 기반으로 Gemini가 요약과 코멘트를 정리합니다.)
+                  </p>
+                )}
+
+              {/* 에러 메시지 (있다면) */}
+              {analysisError && !isAnalysisLoading && (
+                <div className="report-block warning">
+                  <strong>{analysisError}</strong>
+                </div>
+              )}
+
+              {/* 실제 리포트 내용 */}
+              {analysis && !isAnalysisLoading && (
                 <>
                   <p className="step-desc">
                     이번 시뮬레이션을 코치 관점에서 요약한 내용입니다. 아래 질문에 답을
@@ -704,8 +879,9 @@ ${trimmed}
 
             <h4 className="mt16">오늘 연습 목표</h4>
             <p className="small-text">
-              시뮬레이션을 통해 <strong>리더로서 직면하는 상황에서 리더로서의 대화 방법</strong>을
-              을 알아가는 것이 발견해 나가는 것이 목표입니다.
+              이 시뮬레이션을 통해{' '}
+              <strong>리더로서 직면하는 상황에서 나만의 대화 방법</strong>을
+              하나씩 발견해 나가는 것이 목표입니다.
             </p>
           </div>
         </aside>

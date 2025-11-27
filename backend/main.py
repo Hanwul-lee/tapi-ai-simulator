@@ -3,30 +3,32 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
 import os
 
+import google.generativeai as genai
+
 
 # ===========================
-# 1) ENV LOAD
+# 1) ENV LOAD (Gemini)
 # ===========================
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
 
 load_dotenv(ENV_PATH)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not OPENAI_API_KEY:
+if not GEMINI_API_KEY:
     raise RuntimeError(
-        "\n🚨 OPENAI_API_KEY가 없습니다.\n"
-        "backend/.env 파일을 만들고 아래처럼 입력하세요.\n\n"
-        "OPENAI_API_KEY=sk-xxxx\n"
+        "\n🚨 GEMINI_API_KEY가 없습니다.\n"
+        "Render 콘솔 Environment 또는 backend/.env 파일에 아래처럼 입력하세요.\n\n"
+        "GEMINI_API_KEY=your-gemini-api-key\n"
     )
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_MODEL_NAME = "gemini-1.5-pro"
 
 
 # ===========================
@@ -34,13 +36,13 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ===========================
 app = FastAPI(
     title="TAPI-AI Simulator API",
-    description="리더십 시뮬레이션 AI",
-    version="1.1.0",
+    description="리더십 시뮬레이션 AI (Gemini)",
+    version="1.2.0",
 )
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
-    "https://네트리파이도메인.netlify.app",
+    "https://tapiaisimulator.netlify.app",  # Netlify 주소로 수정
 ]
 
 app.add_middleware(
@@ -76,7 +78,7 @@ AI / 프롬프트 / 모델 같은 단어를 절대 말하지 않는다.
 - 부드러운 표현을 선호한다.
 - 상대의 감정을 먼저 고려한다.
 AI / 프롬프트 / 모델 같은 단어를 절대 말하지 않는다.
-"""
+""",
 }
 
 
@@ -84,7 +86,7 @@ AI / 프롬프트 / 모델 같은 단어를 절대 말하지 않는다.
 # 3-1) MOCK 응답 생성기
 # ===========================
 def generate_mock_reply(message: str, persona: str) -> str:
-    """OpenAI 실패 시 페르소나별 규칙 기반 응답"""
+    """Gemini 호출 실패 시 페르소나별 규칙 기반 응답"""
     m = message.strip()
 
     if persona == "idea":
@@ -126,36 +128,45 @@ def health():
 
 
 # ===========================
-# 6) CHAT API
+# 6) CHAT API (Gemini)
 # ===========================
 @app.post("/chat")
 def chat(req: ChatRequest):
     persona_prompt = PERSONA_PROMPTS.get(req.persona, PERSONA_PROMPTS["quiet"])
 
+    # Gemini에 보낼 프롬프트 구성
+    full_prompt = f"""
+다음은 팀장과 팀원 사이의 1:1 면담이다.
+
+[팀원 설정]
+{persona_prompt}
+
+[리더의 발화]
+{req.message}
+
+위 상황에서, 팀원의 입장에서만 대답하라.
+- 자연스러운 한국어 구어체로 3~5문장 정도로 말한다.
+- 코치나 설명자가 아니라, 실제 팀원이 메신저에 답하듯이 말한다.
+- AI, 프롬프트, 모델, Gemini 같은 단어는 절대 언급하지 않는다.
+"""
+
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": persona_prompt},
-                {"role": "user", "content": req.message},
-            ],
-            max_tokens=250,
-            temperature=0.7,
-        )
-        reply = response.choices[0].message.content.strip()
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+        response = model.generate_content(full_prompt)
+        reply = (response.text or "").strip()
         is_mock = False
 
-    except Exception as e:
-        # quota / network / key missing 등
-        err = str(e)
-        if "insufficient_quota" in err or "billing" in err:
+        if not reply:
+            # 혹시 빈 응답이면 mock 사용
             reply = generate_mock_reply(req.message, req.persona)
             is_mock = True
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"❗ OpenAI 호출 실패: {err}"
-            )
+
+    except Exception as e:
+        # 쿼터/네트워크 등 오류 → mock 응답
+        err = str(e)
+        print("Gemini error:", err)
+        reply = generate_mock_reply(req.message, req.persona)
+        is_mock = True
 
     return {
         "reply": reply,
