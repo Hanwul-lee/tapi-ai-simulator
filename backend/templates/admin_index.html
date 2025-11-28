@@ -1,0 +1,49 @@
+{% extends "admin_base.html" %}
+
+{% block content %}
+<div class="dashboard-grid">
+  <div class="dash-card">
+    <h2>고객사 관리</h2>
+    <p>고객사별 계정, 산업군, 프로젝트 정보를 관리합니다.</p>
+    <ul>
+      <li>· 고객사 등록 / 수정 / 비활성화</li>
+      <li>· 산업군(업종/업태) 정보 관리</li>
+      <li>· 담당자 / FT 권한 매핑</li>
+    </ul>
+    <a href="/admin/customers" class="btn-primary">고객사 관리로 이동</a>
+  </div>
+
+  <div class="dash-card">
+    <h2>진단 관리</h2>
+    <p>설문/진단 템플릿과 분석 프로젝트를 관리합니다.</p>
+    <ul>
+      <li>· 진단 템플릿 생성 및 버전 관리</li>
+      <li>· 진행 중 / 완료된 진단 목록 조회</li>
+      <li>· 결과 데이터 다운로드(Excel / PDF)</li>
+    </ul>
+    <a href="/admin/diagnostics" class="btn-primary">진단 관리로 이동</a>
+  </div>
+
+  <div class="dash-card">
+    <h2>페르소나 관리</h2>
+    <p>AI 시뮬레이터에서 사용할 팀원 페르소나를 관리합니다.</p>
+    <ul>
+      <li>· 페르소나 프로필(이름, 유형, 설명) 등록</li>
+      <li>· 리더십 상황별 프롬프트 세팅</li>
+      <li>· 활성/비활성 상태 관리</li>
+    </ul>
+    <a href="/admin/personas" class="btn-primary">페르소나 관리로 이동</a>
+  </div>
+
+  <div class="dash-card">
+    <h2>데이터 축적 & 사용자 히스토리</h2>
+    <p>리더들이 실행한 시뮬레이션 로그와 분석 데이터를 관리합니다.</p>
+    <ul>
+      <li>· 사용자별 시뮬레이션 기록 조회</li>
+      <li>· 대화 로그, 분석 리포트 열람</li>
+      <li>· TDA 분석 시스템으로의 연동/내보내기</li>
+    </ul>
+    <a href="/admin/history" class="btn-primary">데이터 히스토리로 이동</a>
+  </div>
+</div>
+{% endblock %}

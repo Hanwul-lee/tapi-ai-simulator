@@ -3,7 +3,7 @@ import './App.css';
 
 // 백엔드 주소 (로컬 기본값 + 배포 시 환경변수 사용)
 const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+  import.meta.env.VITE_BACKEND_URL || 'https://tapi-backend.onrender.com/api';
 
 // -----------------------------
 // 1. 시뮬레이션 기본 데이터
@@ -165,6 +165,9 @@ function App() {
   // 테마
   const [theme, setTheme] = useState('light');
 
+    // 👉 시뮬레이션 ID (백엔드 챗 세션용)
+  const [simulationId, setSimulationId] = useState(null);
+
   // 스텝: 0=시작화면, 1~6
   const [step, setStep] = useState(0);
 
@@ -178,7 +181,7 @@ function App() {
 
   // Step5: 채팅
   const [chatInput, setChatInput] = useState('');
-  const [chatHistory, setChatHistory] = useState([]); // {from:'leader'|'coach', text}
+  const [chatHistory, setChatHistory] = useState([]); // 🔧 {from:'leader'|'member', text}
   const [isChatLoading, setIsChatLoading] = useState(false);
 
   // Step6: 분석 결과
@@ -238,6 +241,7 @@ function App() {
     setChatHistory([]);
     setAnalysis(null);
     setAnalysisError(null);
+    setSimulationId(null);   // 👉 추가
   };
 
   // -----------------------------
@@ -253,7 +257,7 @@ function App() {
       return;
     }
 
-    // 리더 메시지 추가
+    // 1) 리더 메시지 추가
     const newHistory = [
       ...chatHistory,
       { from: 'leader', text: trimmed, time: new Date().toISOString() },
@@ -262,62 +266,15 @@ function App() {
     setChatInput('');
     setIsChatLoading(true);
 
-    const personaName = selectedPersona.displayName;
-    const personaType = selectedPersona.name;
-    const topicLabel = selectedTopic.label;
-    const situationTitle = selectedSituation.title;
-
-    // 이전 대화 로그 (현재 발화 직전까지)
-    const historyLines =
-      chatHistory.length === 0
-        ? '이전 대화는 아직 없습니다.'
-        : chatHistory
-            .map((m) =>
-              m.from === 'leader'
-                ? `팀장: ${m.text}`
-                : `팀원: ${m.text}`,
-            )
-            .join('\n');
-
-    // 프롬프트 (백엔드에서 Gemini/OpenAI 등 공통 사용 가능)
-    const contextMessage = `
-당신은 가상의 팀원 "${personaName}"입니다. (${personaType})
-아래는 당신과 팀장이 처한 상황입니다.
-
-- 회사: ${COMPANY_ID}
-- 리더십 주제: ${topicLabel}
-- 현재 상황: ${situationTitle}
-- 팀장이 메모한 면담 아젠다: ${agenda || '별도 메모 없음'}
-
-[지금까지의 대화 로그]
-${historyLines}
-
-지금부터 팀장은 계속해서 당신과 대화하고 있습니다.
-바로 직전에 팀장이 이렇게 말했습니다.
-
-[팀장의 가장 최근 말]
-"${trimmed}"
-
-위의 설명은 모두 참고용 정보일 뿐이며,
-절대 그대로 반복하거나 요약해서 말하지 마세요.
-
-당신은 실제 팀원처럼,
-- 자연스러운 한국어 존댓말로,
-- 2~4문장 안에서,
-- 당신의 감정과 생각을 담아
-
-"팀장의 방금 한 말에 이어서 하는 당신의 대답"만 말해 주세요.
-AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요.
-    `;
-
     try {
+      // 2) 백엔드에 "리더의 방금 한 말" + persona + simulation_id만 전달
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: contextMessage,
-          persona: selectedPersona.id || 'quiet',
-          simulation_id: null,
+          message: trimmed,
+          persona: selectedPersona?.id ?? 'quiet',
+          simulation_id: simulationId, // 첫 턴엔 null, 이후엔 유지
         }),
       });
 
@@ -325,25 +282,31 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
         throw new Error('백엔드 응답 오류');
       }
 
-      const data = await res.json(); // { reply, ... }
-      const coachReply = data?.reply || '응답을 불러오지 못했습니다.';
+      const data = await res.json(); // { simulation_id, reply }
 
+      // 처음 호출일 경우, 백엔드에서 받은 simulation_id 저장
+      if (!simulationId && data.simulation_id) {
+        setSimulationId(data.simulation_id);
+      }
+
+      const memberReply = data?.reply || '응답을 불러오지 못했습니다.';
+
+      // 3) 팀원(페르소나) 답변 추가
       setChatHistory((prev) => [
         ...prev,
         {
-          from: 'coach',
-          text: coachReply,
+          from: 'member',          // ✅ coach가 아니라 member
+          text: memberReply,
           time: new Date().toISOString(),
         },
       ]);
     } catch (error) {
       console.error(error);
-      // 실패 시 코멘트 대신 안내 문구
       setChatHistory((prev) => [
         ...prev,
         {
-          from: 'coach',
-          text: '서버와 연결이 원활하지 않아, 임시로 로컬 피드백만 제공됩니다.',
+          from: 'member',
+          text: '서버와 연결이 원활하지 않아, 임시로 응답을 가져오지 못했습니다.',
           time: new Date().toISOString(),
         },
       ]);
@@ -364,7 +327,6 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
       chatHistory.length > 0;
 
     if (!shouldGenerateReport) {
-      // 조건이 안 되면 리포트 초기화
       if (step === 6) {
         setAnalysis(null);
         setAnalysisError(null);
@@ -383,9 +345,8 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
           .find((m) => m.from === 'leader');
         const lastCoach = [...chatHistory]
           .reverse()
-          .find((m) => m.from === 'coach');
+          .find((m) => m.from === 'member'); // ⚠️ 현재 Step5는 member만 있으므로 거의 사용 안 됨
 
-        // 백엔드로 보낼 payload
         const payload = {
           company_id: COMPANY_ID,
           topic: {
@@ -408,7 +369,7 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
             time: m.time,
           })),
           lastUserMessage: lastUser?.text || '',
-          lastCoachReply: lastCoach?.text || '',
+          lastCoachReply: lastMember?.text || '',
         };
 
         const res = await fetch(`${BACKEND_URL}/report`, {
@@ -422,8 +383,7 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
         }
 
         const data = await res.json();
-        // 백엔드에서 Gemini로 생성한 결과를 기준으로 세팅
-        // 기대 포맷: { summary, strengths, improvements, coachNote }
+
         const newAnalysis = {
           summary:
             data.summary ||
@@ -445,7 +405,6 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
         console.error('Report 생성 중 오류:', error);
         setAnalysisError('리포트를 생성하는 중 오류가 발생했습니다. 기본 코멘트로 대체합니다.');
 
-        // 🔁 백업: 로컬 분석으로 대체
         const lastUser = [...chatHistory]
           .reverse()
           .find((m) => m.from === 'leader');
@@ -753,15 +712,16 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
             <div className="card">
               <h2>STEP 6. 피드백 리포트</h2>
 
-              {/* 조건 미충족 (대화 안 한 경우 등) */}
-              {(!selectedTopic || !selectedPersona || !selectedSituation || chatHistory.length === 0) && (
+              {(!selectedTopic ||
+                !selectedPersona ||
+                !selectedSituation ||
+                chatHistory.length === 0) && (
                 <p className="step-desc">
                   리포트를 생성하려면 1~5단계를 먼저 완료하고, 최소 한 번 이상 시뮬레이션
                   채팅을 진행해 주세요.
                 </p>
               )}
 
-              {/* 로딩 중 */}
               {selectedTopic &&
                 selectedPersona &&
                 selectedSituation &&
@@ -770,18 +730,16 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
                   <p className="step-desc">
                     리더십 코치 관점에서 피드백 리포트를 생성하는 중입니다…
                     <br />
-                    (대화 내용과 아젠다를 기반으로 Gemini가 요약과 코멘트를 정리합니다.)
+                    (대화 내용과 아젠다를 기반으로 Tapi AI가 요약과 코멘트를 정리합니다.)
                   </p>
                 )}
 
-              {/* 에러 메시지 (있다면) */}
               {analysisError && !isAnalysisLoading && (
                 <div className="report-block warning">
                   <strong>{analysisError}</strong>
                 </div>
               )}
 
-              {/* 실제 리포트 내용 */}
               {analysis && !isAnalysisLoading && (
                 <>
                   <p className="step-desc">
@@ -836,11 +794,7 @@ AI, 프롬프트, 시뮬레이션 같은 단어는 절대 언급하지 마세요
 
           {/* 하단 네비게이션 */}
           <div className="step-nav">
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={handleRestart}
-            >
+            <button type="button" className="ghost-btn" onClick={handleRestart}>
               초기화
             </button>
             <div className="step-nav-right">

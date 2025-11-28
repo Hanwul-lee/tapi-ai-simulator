@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <title>{{ page_title or "TAPI Admin" }}</title>
+    <link rel="stylesheet" href="/static/admin.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <!-- 왼쪽 사이드바 -->
+      <aside class="sidebar">
+        <div class="logo">
+          <span class="logo-main">TAPI</span>
+          <span class="logo-sub">Admin</span>
+        </div>
+
+        <nav class="nav">
+          <a href="/admin" class="nav-item {% if active_menu == 'dashboard' %}active{% endif %}">
+            🏠 대시보드
+          </a>
+          <a href="/admin/customers" class="nav-item {% if active_menu == 'customers' %}active{% endif %}">
+            🏢 고객사 관리
+          </a>
+          <a href="/admin/diagnostics" class="nav-item {% if active_menu == 'diagnostics' %}active{% endif %}">
+            📊 진단 관리
+          </a>
+          <a href="/admin/personas" class="nav-item {% if active_menu == 'personas' %}active{% endif %}">
+            👥 페르소나 관리
+          </a>
+          <a href="/admin/history" class="nav-item {% if active_menu == 'history' %}active{% endif %}">
+            🗂 데이터 축적
+          </a>
+        </nav>
+      </aside>
+
+      <!-- 오른쪽 메인 영역 -->
+      <main class="main">
+        <header class="main-header">
+          <h1 class="main-title">{{ page_title or "TAPI 관리자" }}</h1>
+        </header>
+
+        <section class="main-content">
+          {% block content %}{% endblock %}
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
