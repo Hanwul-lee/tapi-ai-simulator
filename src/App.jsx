@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import './App.css';
+import AdminDashboard from './AdminDashboard';
 
 // 백엔드 주소 (로컬 기본값 + 배포 시 환경변수 사용)
 const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL || 'https://tapi-backend.onrender.com/api';
+  import.meta.env.VITE_BACKEND_URL ||
+  'https://tapi-ai-simulator-backend.onrender.com';
+
+// (임시) 접근 토큰 – /access/verify 로 받은 값을 .env 에 넣어서 사용
+const ACCESS_TOKEN = import.meta.env.VITE_ACCESS_TOKEN || '';
 
 // -----------------------------
 // 1. 시뮬레이션 기본 데이터
@@ -165,7 +170,10 @@ function App() {
   // 테마
   const [theme, setTheme] = useState('light');
 
-    // 👉 시뮬레이션 ID (백엔드 챗 세션용)
+  // 시뮬레이터 / 관리자 모드
+  const [mode, setMode] = useState('sim'); // 'sim' | 'admin'
+
+  // 시뮬레이션 ID (백엔드 챗 세션용)
   const [simulationId, setSimulationId] = useState(null);
 
   // 스텝: 0=시작화면, 1~6
@@ -181,7 +189,7 @@ function App() {
 
   // Step5: 채팅
   const [chatInput, setChatInput] = useState('');
-  const [chatHistory, setChatHistory] = useState([]); // 🔧 {from:'leader'|'member', text}
+  const [chatHistory, setChatHistory] = useState([]); // {from:'leader'|'member', text}
   const [isChatLoading, setIsChatLoading] = useState(false);
 
   // Step6: 분석 결과
@@ -241,7 +249,7 @@ function App() {
     setChatHistory([]);
     setAnalysis(null);
     setAnalysisError(null);
-    setSimulationId(null);   // 👉 추가
+    setSimulationId(null);
   };
 
   // -----------------------------
@@ -267,10 +275,12 @@ function App() {
     setIsChatLoading(true);
 
     try {
-      // 2) 백엔드에 "리더의 방금 한 말" + persona + simulation_id만 전달
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ACCESS_TOKEN && { 'X-Access-Token': ACCESS_TOKEN }),
+        },
         body: JSON.stringify({
           message: trimmed,
           persona: selectedPersona?.id ?? 'quiet',
@@ -284,18 +294,16 @@ function App() {
 
       const data = await res.json(); // { simulation_id, reply }
 
-      // 처음 호출일 경우, 백엔드에서 받은 simulation_id 저장
       if (!simulationId && data.simulation_id) {
         setSimulationId(data.simulation_id);
       }
 
       const memberReply = data?.reply || '응답을 불러오지 못했습니다.';
 
-      // 3) 팀원(페르소나) 답변 추가
       setChatHistory((prev) => [
         ...prev,
         {
-          from: 'member',          // ✅ coach가 아니라 member
+          from: 'member',
           text: memberReply,
           time: new Date().toISOString(),
         },
@@ -339,13 +347,12 @@ function App() {
       setAnalysisError(null);
 
       try {
-        // 마지막 유저/코치 메시지 추출 (fallback용 / 백엔드 참고용)
         const lastUser = [...chatHistory]
           .reverse()
           .find((m) => m.from === 'leader');
-        const lastCoach = [...chatHistory]
+        const lastMember = [...chatHistory]
           .reverse()
-          .find((m) => m.from === 'member'); // ⚠️ 현재 Step5는 member만 있으므로 거의 사용 안 됨
+          .find((m) => m.from === 'member');
 
         const payload = {
           company_id: COMPANY_ID,
@@ -374,7 +381,10 @@ function App() {
 
         const res = await fetch(`${BACKEND_URL}/report`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(ACCESS_TOKEN && { 'X-Access-Token': ACCESS_TOKEN }),
+          },
           body: JSON.stringify(payload),
         });
 
@@ -408,9 +418,9 @@ function App() {
         const lastUser = [...chatHistory]
           .reverse()
           .find((m) => m.from === 'leader');
-        const lastCoach = [...chatHistory]
+        const lastMember = [...chatHistory]
           .reverse()
-          .find((m) => m.from === 'coach');
+          .find((m) => m.from === 'member');
 
         const fallback = createLocalAnalysis({
           topic: selectedTopic,
@@ -418,7 +428,7 @@ function App() {
           situation: selectedSituation,
           agenda,
           lastUserMessage: lastUser?.text || '',
-          lastCoachReply: lastCoach?.text || '',
+          lastCoachReply: lastMember?.text || '',
         });
         setAnalysis(fallback);
       } finally {
@@ -446,9 +456,11 @@ function App() {
         </div>
 
         <div className="header-right">
-          <span className="step-badge">
-            Step {step === 0 ? '0' : `${step}/6`}
-          </span>
+          {mode === 'sim' && (
+            <span className="step-badge">
+              Step {step === 0 ? '0' : `${step}/6`}
+            </span>
+          )}
           <button
             type="button"
             className="theme-toggle-btn"
@@ -456,390 +468,401 @@ function App() {
           >
             {theme === 'light' ? '🌙 다크 모드' : '☀️ 라이트 모드'}
           </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => setMode((prev) => (prev === 'sim' ? 'admin' : 'sim'))}
+          >
+            {mode === 'sim' ? '관리자 모드' : '시뮬레이터로 돌아가기'}
+          </button>
         </div>
       </header>
 
-      {/* 메인 레이아웃 */}
-      <main className="app-main">
-        {/* 왼쪽: 스텝 내용 */}
-        <section className="step-section">
-          {/* Intro */}
-          {step === 0 && (
-            <div className="card intro-card">
-              <h2>AI 시뮬레이션 시작</h2>
-              <p className="intro-text">
-                6단계 흐름을 따라가며{' '}
-                <strong>“리더로서 직면한 상황에서 나는 어떻게 말하고 행동할 것인가?”</strong>
-                를 연습해 보세요.
-              </p>
-              <ol className="intro-steps">
-                <li>주제를 선택합니다. (리더 역할 이해 / 리더의 커뮤니케이션 / 성과평가 면담 )</li>
-                <li>시뮬레이션 할 팀원의 페르소나를 선택합니다.</li>
-                <li>구체적인 상황을 고릅니다.</li>
-                <li>면담 아젠다를 간단히 메모합니다.</li>
-                <li>시뮬레이션 채팅으로 대화를 시도합니다.</li>
-                <li>마지막으로 코치 관점에서 정리하고, 나만의 원칙을 남깁니다.</li>
-              </ol>
-              <button type="button" className="primary-btn" onClick={handleNext}>
-                시뮬레이션 시작하기
-              </button>
-            </div>
-          )}
-
-          {/* Step 1: 주제 선택 */}
-          {step === 1 && (
-            <div className="card">
-              <h2>STEP 1. 주제 선택</h2>
-              <p className="step-desc">
-                오늘 연습하고 싶은 리더십 주제를 선택하세요. 이후 모든 상황과 피드백이 이
-                선택에 맞춰집니다.
-              </p>
-              <div className="topic-grid">
-                {TOPICS.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={
-                      t.id === selectedTopicId ? 'topic-card active' : 'topic-card'
-                    }
-                    onClick={() => setSelectedTopicId(t.id)}
-                  >
-                    <div className="topic-label">{t.label}</div>
-                    <p className="topic-desc">{t.description}</p>
-                  </button>
-                ))}
+      {/* 메인 레이아웃: 모드에 따라 분기 */}
+      {mode === 'admin' ? (
+        <AdminDashboard />
+      ) : (
+        <main className="app-main">
+          {/* 왼쪽: 스텝 내용 */}
+          <section className="step-section">
+            {/* Intro */}
+            {step === 0 && (
+              <div className="card intro-card">
+                <h2>AI 시뮬레이션 시작</h2>
+                <p className="intro-text">
+                  6단계 흐름을 따라가며{' '}
+                  <strong>“리더로서 직면한 상황에서 나는 어떻게 말하고 행동할 것인가?”</strong>
+                  를 연습해 보세요.
+                </p>
+                <ol className="intro-steps">
+                  <li>주제를 선택합니다. (리더 역할 이해 / 리더의 커뮤니케이션 / 성과평가 면담 )</li>
+                  <li>시뮬레이션 할 팀원의 페르소나를 선택합니다.</li>
+                  <li>구체적인 상황을 고릅니다.</li>
+                  <li>면담 아젠다를 간단히 메모합니다.</li>
+                  <li>시뮬레이션 채팅으로 대화를 시도합니다.</li>
+                  <li>마지막으로 코치 관점에서 정리하고, 나만의 원칙을 남깁니다.</li>
+                </ol>
+                <button type="button" className="primary-btn" onClick={handleNext}>
+                  시뮬레이션 시작하기
+                </button>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Step 2: 페르소나 선택 */}
-          {step === 2 && (
-            <div className="card">
-              <h2>STEP 2. 팀원 페르소나 선택</h2>
-              <p className="step-desc">
-                실제로 떠오르는 팀원을 하나 떠올리고, 가장 비슷한 유형의{' '}
-                <strong>가상 인물 프로필</strong>을 선택해 보세요.
-              </p>
-              <div className="persona-grid">
-                {PERSONAS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={
-                      p.id === selectedPersonaId
-                        ? 'persona-card active'
-                        : 'persona-card'
-                    }
-                    onClick={() => setSelectedPersonaId(p.id)}
-                  >
-                    <div className="persona-header">
-                      <div className="persona-avatar" aria-hidden="true">
-                        {p.avatar}
-                      </div>
-                      <div className="persona-header-text">
-                        <div className="persona-name">
-                          {p.displayName}{' '}
-                          <span className="persona-type">({p.name})</span>
+            {/* Step 1: 주제 선택 */}
+            {step === 1 && (
+              <div className="card">
+                <h2>STEP 1. 주제 선택</h2>
+                <p className="step-desc">
+                  오늘 연습하고 싶은 리더십 주제를 선택하세요. 이후 모든 상황과 피드백이 이
+                  선택에 맞춰집니다.
+                </p>
+                <div className="topic-grid">
+                  {TOPICS.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={
+                        t.id === selectedTopicId ? 'topic-card active' : 'topic-card'
+                      }
+                      onClick={() => setSelectedTopicId(t.id)}
+                    >
+                      <div className="topic-label">{t.label}</div>
+                      <p className="topic-desc">{t.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: 페르소나 선택 */}
+            {step === 2 && (
+              <div className="card">
+                <h2>STEP 2. 팀원 페르소나 선택</h2>
+                <p className="step-desc">
+                  실제로 떠오르는 팀원을 하나 떠올리고, 가장 비슷한 유형의{' '}
+                  <strong>가상 인물 프로필</strong>을 선택해 보세요.
+                </p>
+                <div className="persona-grid">
+                  {PERSONAS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={
+                        p.id === selectedPersonaId
+                          ? 'persona-card active'
+                          : 'persona-card'
+                      }
+                      onClick={() => setSelectedPersonaId(p.id)}
+                    >
+                      <div className="persona-header">
+                        <div className="persona-avatar" aria-hidden="true">
+                          {p.avatar}
                         </div>
-                        <div className="persona-position">{p.position}</div>
+                        <div className="persona-header-text">
+                          <div className="persona-name">
+                            {p.displayName}{' '}
+                            <span className="persona-type">({p.name})</span>
+                          </div>
+                          <div className="persona-position">{p.position}</div>
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="persona-tags">
-                      {p.tags.map((tag) => (
-                        <span key={tag} className="tag">
-                          {tag}
-                        </span>
+                      <div className="persona-tags">
+                        {p.tags.map((tag) => (
+                          <span key={tag} className="tag">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+
+                      <p className="persona-desc">{p.description}</p>
+                      <p className="persona-tagline">{p.tagline}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: 상황 선택 */}
+            {step === 3 && (
+              <div className="card">
+                <h2>STEP 3. 상황 선택</h2>
+                {!selectedTopic && (
+                  <p className="warning-text">
+                    먼저 1단계에서 주제를 선택해 주세요. (상단 &quot;이전&quot; 버튼)
+                  </p>
+                )}
+                {selectedTopic && (
+                  <>
+                    <p className="step-desc">
+                      {selectedTopic.label} 관점에서 연습해 보고 싶은 구체적인 상황을 선택하세요.
+                    </p>
+                    <div className="situation-list">
+                      {situations.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          className={
+                            s.id === selectedSituationId
+                              ? 'situation-item active'
+                              : 'situation-item'
+                          }
+                          onClick={() => setSelectedSituationId(s.id)}
+                        >
+                          <div className="situation-title">{s.title}</div>
+                          <p className="situation-detail">{s.detail}</p>
+                        </button>
                       ))}
                     </div>
-
-                    <p className="persona-desc">{p.description}</p>
-                    <p className="persona-tagline">{p.tagline}</p>
-                  </button>
-                ))}
+                  </>
+                )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Step 3: 상황 선택 */}
-          {step === 3 && (
-            <div className="card">
-              <h2>STEP 3. 상황 선택</h2>
-              {!selectedTopic && (
-                <p className="warning-text">
-                  먼저 1단계에서 주제를 선택해 주세요. (상단 &quot;이전&quot; 버튼)
+            {/* Step 4: 면담 아젠다 메모 */}
+            {step === 4 && (
+              <div className="card">
+                <h2>STEP 4. 면담 아젠다 메모</h2>
+                <p className="step-desc">
+                  실제 면담을 한다고 가정했을 때, 꼭 다루고 싶은 핵심 아젠다를 적어 보세요.
+                  완벽할 필요 없이, 키워드 수준으로만 남겨도 충분합니다.
                 </p>
-              )}
-              {selectedTopic && (
-                <>
-                  <p className="step-desc">
-                    {selectedTopic.label} 관점에서 연습해 보고 싶은 구체적인 상황을 선택하세요.
-                  </p>
-                  <div className="situation-list">
-                    {situations.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        className={
-                          s.id === selectedSituationId
-                            ? 'situation-item active'
-                            : 'situation-item'
-                        }
-                        onClick={() => setSelectedSituationId(s.id)}
-                      >
-                        <div className="situation-title">{s.title}</div>
-                        <p className="situation-detail">{s.detail}</p>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Step 4: 면담 아젠다 메모 */}
-          {step === 4 && (
-            <div className="card">
-              <h2>STEP 4. 면담 아젠다 메모</h2>
-              <p className="step-desc">
-                실제 면담을 한다고 가정했을 때, 꼭 다루고 싶은 핵심 아젠다를 적어 보세요.
-                완벽할 필요 없이, 키워드 수준으로만 남겨도 충분합니다.
-              </p>
-              <div className="agenda-layout">
-                <div className="agenda-main">
-                  <textarea
-                    value={agenda}
-                    onChange={(e) => setAgenda(e.target.value)}
-                    placeholder={`예)
+                <div className="agenda-layout">
+                  <div className="agenda-main">
+                    <textarea
+                      value={agenda}
+                      onChange={(e) => setAgenda(e.target.value)}
+                      placeholder={`예)
 1) 상황 정리: 현재 반복되고 있는 이슈를 사실 중심으로 정리
 2) 감정 공감: 팀원이 느끼는 부담/답답함 인정
 3) 기준 제시: 리더로서 꼭 지키고 싶은 기준 1~2개
 4) 실행 합의: 다음 스프린트에서 함께 시도해볼 행동 합의`}
-                  />
-                </div>
-                <div className="agenda-checklist">
-                  <h3>대화 체크리스트</h3>
-                  <ul>
-                    <li>이 상황에서 리더로서 내 역할은 무엇인가?</li>
-                    <li>팀과 조직의 기준/원칙은 무엇인지 정리했는가?</li>
-                    <li>구성원의 감정과 관점을 먼저 이해하려는 질문이 있는가?</li>
-                    <li>대화 이후 follow-up 계획을 가지고 있는가?</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step 5: 시뮬레이션 채팅 */}
-          {step === 5 && (
-            <div className="card">
-              <h2>STEP 5. 시뮬레이션 채팅</h2>
-              <p className="step-desc">
-                선택한 팀원 페르소나와 실제로 대화한다고 생각하고, 첫 문장을 보내보세요.
-                이후에는 상황에 따라 여러 번 주고받으며 연습할 수 있습니다.
-              </p>
-
-              {/* 현재 설정 요약 (Step 5 전용) */}
-              <div className="chat-context-summary">
-                <div>
-                  <strong>주제</strong> : {selectedTopic ? selectedTopic.label : '미선택'}
-                </div>
-                <div>
-                  <strong>상황</strong> :{' '}
-                  {selectedSituation ? selectedSituation.title : '미선택'}
-                </div>
-                <div>
-                  <strong>팀원</strong> :{' '}
-                  {selectedPersona
-                    ? `${selectedPersona.displayName} (${selectedPersona.name})`
-                    : '미선택'}
+                    />
+                  </div>
+                  <div className="agenda-checklist">
+                    <h3>대화 체크리스트</h3>
+                    <ul>
+                      <li>이 상황에서 리더로서 내 역할은 무엇인가?</li>
+                      <li>팀과 조직의 기준/원칙은 무엇인지 정리했는가?</li>
+                      <li>구성원의 감정과 관점을 먼저 이해하려는 질문이 있는가?</li>
+                      <li>대화 이후 follow-up 계획을 가지고 있는가?</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
+            )}
 
-              <div className="chat-box">
-                <div className="chat-history">
-                  {chatHistory.length === 0 && (
-                    <p className="chat-placeholder">
-                      아직 대화가 없습니다. 아래 입력창에 첫 문장을 적어보세요.
-                      <br />
-                      예) &quot;요즘 업무 어떻게 느끼고 있어? 솔직하게 이야기해줘도
-                      괜찮아.&quot;
-                    </p>
-                  )}
-
-                  {chatHistory.map((m, idx) => (
-                    <div
-                      key={idx}
-                      className={
-                        m.from === 'leader' ? 'chat-bubble me' : 'chat-bubble you'
-                      }
-                    >
-                      <div className="chat-label">
-                        {m.from === 'leader' ? '리더(나)' : '팀원 페르소나'}
-                      </div>
-                      <div className="chat-text">{m.text}</div>
-                    </div>
-                  ))}
-
-                  {isChatLoading && (
-                    <div className="chat-bubble you typing">
-                      <div className="chat-label">팀원 페르소나</div>
-                      <div className="typing-dots">
-                        <span />
-                        <span />
-                        <span />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <form className="chat-input-area" onSubmit={handleSendChat}>
-                  <textarea
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="여기에 리더로서의 말을 적고 Enter(또는 보내기 버튼)를 눌러보세요."
-                  />
-                  <button type="submit" className="primary-btn" disabled={isChatLoading}>
-                    {isChatLoading ? '응답 기다리는 중…' : '보내기'}
-                  </button>
-                </form>
-              </div>
-            </div>
-          )}
-
-          {/* Step 6: 피드백 리포트 (Gemini 결과 사용) */}
-          {step === 6 && (
-            <div className="card">
-              <h2>STEP 6. 피드백 리포트</h2>
-
-              {(!selectedTopic ||
-                !selectedPersona ||
-                !selectedSituation ||
-                chatHistory.length === 0) && (
+            {/* Step 5: 시뮬레이션 채팅 */}
+            {step === 5 && (
+              <div className="card">
+                <h2>STEP 5. 시뮬레이션 채팅</h2>
                 <p className="step-desc">
-                  리포트를 생성하려면 1~5단계를 먼저 완료하고, 최소 한 번 이상 시뮬레이션
-                  채팅을 진행해 주세요.
+                  선택한 팀원 페르소나와 실제로 대화한다고 생각하고, 첫 문장을 보내보세요.
+                  이후에는 상황에 따라 여러 번 주고받으며 연습할 수 있습니다.
                 </p>
-              )}
 
-              {selectedTopic &&
-                selectedPersona &&
-                selectedSituation &&
-                chatHistory.length > 0 &&
-                isAnalysisLoading && (
+                {/* 현재 설정 요약 (Step 5 전용) */}
+                <div className="chat-context-summary">
+                  <div>
+                    <strong>주제</strong> : {selectedTopic ? selectedTopic.label : '미선택'}
+                  </div>
+                  <div>
+                    <strong>상황</strong> :{' '}
+                    {selectedSituation ? selectedSituation.title : '미선택'}
+                  </div>
+                  <div>
+                    <strong>팀원</strong> :{' '}
+                    {selectedPersona
+                      ? `${selectedPersona.displayName} (${selectedPersona.name})`
+                      : '미선택'}
+                  </div>
+                </div>
+
+                <div className="chat-box">
+                  <div className="chat-history">
+                    {chatHistory.length === 0 && (
+                      <p className="chat-placeholder">
+                        아직 대화가 없습니다. 아래 입력창에 첫 문장을 적어보세요.
+                        <br />
+                        예) &quot;요즘 업무 어떻게 느끼고 있어? 솔직하게 이야기해줘도
+                        괜찮아.&quot;
+                      </p>
+                    )}
+
+                    {chatHistory.map((m, idx) => (
+                      <div
+                        key={idx}
+                        className={
+                          m.from === 'leader' ? 'chat-bubble me' : 'chat-bubble you'
+                        }
+                      >
+                        <div className="chat-label">
+                          {m.from === 'leader' ? '리더(나)' : '팀원 페르소나'}
+                        </div>
+                        <div className="chat-text">{m.text}</div>
+                      </div>
+                    ))}
+
+                    {isChatLoading && (
+                      <div className="chat-bubble you typing">
+                        <div className="chat-label">팀원 페르소나</div>
+                        <div className="typing-dots">
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <form className="chat-input-area" onSubmit={handleSendChat}>
+                    <textarea
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="여기에 리더로서의 말을 적고 Enter(또는 보내기 버튼)를 눌러보세요."
+                    />
+                    <button type="submit" className="primary-btn" disabled={isChatLoading}>
+                      {isChatLoading ? '응답 기다리는 중…' : '보내기'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Step 6: 피드백 리포트 (Gemini 결과 사용) */}
+            {step === 6 && (
+              <div className="card">
+                <h2>STEP 6. 피드백 리포트</h2>
+
+                {(!selectedTopic ||
+                  !selectedPersona ||
+                  !selectedSituation ||
+                  chatHistory.length === 0) && (
                   <p className="step-desc">
-                    리더십 코치 관점에서 피드백 리포트를 생성하는 중입니다…
-                    <br />
-                    (대화 내용과 아젠다를 기반으로 Tapi AI가 요약과 코멘트를 정리합니다.)
+                    리포트를 생성하려면 1~5단계를 먼저 완료하고, 최소 한 번 이상 시뮬레이션
+                    채팅을 진행해 주세요.
                   </p>
                 )}
 
-              {analysisError && !isAnalysisLoading && (
-                <div className="report-block warning">
-                  <strong>{analysisError}</strong>
-                </div>
-              )}
-
-              {analysis && !isAnalysisLoading && (
-                <>
-                  <p className="step-desc">
-                    이번 시뮬레이션을 코치 관점에서 요약한 내용입니다. 아래 질문에 답을
-                    적어보면 학습 효과가 더 커집니다.
-                  </p>
-
-                  <div className="report-block">
-                    <h3>1) 요약</h3>
-                    <p>{analysis.summary}</p>
-                  </div>
-
-                  <div className="report-columns">
-                    <div className="report-block">
-                      <h3>2) 이번 대화에서 잘한 점</h3>
-                      <ul>
-                        {analysis.strengths.map((s, idx) => (
-                          <li key={idx}>{s}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="report-block">
-                      <h3>3) 다음에 보완해 보고 싶은 점</h3>
-                      <ul>
-                        {analysis.improvements.map((s, idx) => (
-                          <li key={idx}>{s}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-
-                  <div className="report-block">
-                    <h3>4) 코치 코멘트</h3>
-                    <p>{analysis.coachNote}</p>
-                  </div>
-
-                  <div className="report-block">
-                    <h3>5) 나만의 한 줄 리더십 원칙으로 정리해본다면?</h3>
-                    <p className="hint">
-                      예) &quot;갈등 상황일수록 먼저 상대의 감정을 요약해주고, 그 다음에
-                      기준을 설명한다.&quot;
+                {selectedTopic &&
+                  selectedPersona &&
+                  selectedSituation &&
+                  chatHistory.length > 0 &&
+                  isAnalysisLoading && (
+                    <p className="step-desc">
+                      리더십 코치 관점에서 피드백 리포트를 생성하는 중입니다…
+                      <br />
+                      (대화 내용과 아젠다를 기반으로 Tapi AI가 요약과 코멘트를 정리합니다.)
                     </p>
-                    <textarea
-                      placeholder="여기에 오늘 시뮬레이션을 통해 얻은 나만의 한 줄 원칙을 적어보세요."
-                      rows={3}
-                    />
+                  )}
+
+                {analysisError && !isAnalysisLoading && (
+                  <div className="report-block warning">
+                    <strong>{analysisError}</strong>
                   </div>
-                </>
-              )}
+                )}
+
+                {analysis && !isAnalysisLoading && (
+                  <>
+                    <p className="step-desc">
+                      이번 시뮬레이션을 코치 관점에서 요약한 내용입니다. 아래 질문에 답을
+                      적어보면 학습 효과가 더 커집니다.
+                    </p>
+
+                    <div className="report-block">
+                      <h3>1) 요약</h3>
+                      <p>{analysis.summary}</p>
+                    </div>
+
+                    <div className="report-columns">
+                      <div className="report-block">
+                        <h3>2) 이번 대화에서 잘한 점</h3>
+                        <ul>
+                          {analysis.strengths.map((s, idx) => (
+                            <li key={idx}>{s}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="report-block">
+                        <h3>3) 다음에 보완해 보고 싶은 점</h3>
+                        <ul>
+                          {analysis.improvements.map((s, idx) => (
+                            <li key={idx}>{s}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="report-block">
+                      <h3>4) 코치 코멘트</h3>
+                      <p>{analysis.coachNote}</p>
+                    </div>
+
+                    <div className="report-block">
+                      <h3>5) 나만의 한 줄 리더십 원칙으로 정리해본다면?</h3>
+                      <p className="hint">
+                        예) &quot;갈등 상황일수록 먼저 상대의 감정을 요약해주고, 그 다음에
+                        기준을 설명한다.&quot;
+                      </p>
+                      <textarea
+                        placeholder="여기에 오늘 시뮬레이션을 통해 얻은 나만의 한 줄 원칙을 적어보세요."
+                        rows={3}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* 하단 네비게이션 */}
+            <div className="step-nav">
+              <button type="button" className="ghost-btn" onClick={handleRestart}>
+                초기화
+              </button>
+              <div className="step-nav-right">
+                {step > 0 && (
+                  <button type="button" className="ghost-btn" onClick={handlePrev}>
+                    이전
+                  </button>
+                )}
+                {step < 6 && (
+                  <button type="button" className="primary-btn" onClick={handleNext}>
+                    다음
+                  </button>
+                )}
+              </div>
             </div>
-          )}
+          </section>
 
-          {/* 하단 네비게이션 */}
-          <div className="step-nav">
-            <button type="button" className="ghost-btn" onClick={handleRestart}>
-              초기화
-            </button>
-            <div className="step-nav-right">
-              {step > 0 && (
-                <button type="button" className="ghost-btn" onClick={handlePrev}>
-                  이전
-                </button>
-              )}
-              {step < 6 && (
-                <button type="button" className="primary-btn" onClick={handleNext}>
-                  다음
-                </button>
-              )}
+          {/* 오른쪽: 선택 요약 패널 */}
+          <aside className="summary-section">
+            <div className="card summary-card">
+              <h3>현재 설정 요약</h3>
+              <dl>
+                <dt>주제</dt>
+                <dd>{selectedTopic ? selectedTopic.label : '아직 선택되지 않음'}</dd>
+
+                <dt>팀원 페르소나</dt>
+                <dd>
+                  {selectedPersona
+                    ? `${selectedPersona.displayName} (${selectedPersona.name})`
+                    : '아직 선택되지 않음'}
+                </dd>
+
+                <dt>상황</dt>
+                <dd>{selectedSituation ? selectedSituation.title : '아직 선택되지 않음'}</dd>
+              </dl>
+
+              <h4 className="mt16">오늘 연습 목표</h4>
+              <p className="small-text">
+                이 시뮬레이션을 통해{' '}
+                <strong>리더로서 직면하는 상황에서 나만의 대화 방법</strong>을
+                하나씩 발견해 나가는 것이 목표입니다.
+              </p>
             </div>
-          </div>
-        </section>
-
-        {/* 오른쪽: 선택 요약 패널 */}
-        <aside className="summary-section">
-          <div className="card summary-card">
-            <h3>현재 설정 요약</h3>
-            <dl>
-              <dt>주제</dt>
-              <dd>{selectedTopic ? selectedTopic.label : '아직 선택되지 않음'}</dd>
-
-              <dt>팀원 페르소나</dt>
-              <dd>
-                {selectedPersona
-                  ? `${selectedPersona.displayName} (${selectedPersona.name})`
-                  : '아직 선택되지 않음'}
-              </dd>
-
-              <dt>상황</dt>
-              <dd>{selectedSituation ? selectedSituation.title : '아직 선택되지 않음'}</dd>
-            </dl>
-
-            <h4 className="mt16">오늘 연습 목표</h4>
-            <p className="small-text">
-              이 시뮬레이션을 통해{' '}
-              <strong>리더로서 직면하는 상황에서 나만의 대화 방법</strong>을
-              하나씩 발견해 나가는 것이 목표입니다.
-            </p>
-          </div>
-        </aside>
-      </main>
+          </aside>
+        </main>
+      )}
     </div>
   );
 }

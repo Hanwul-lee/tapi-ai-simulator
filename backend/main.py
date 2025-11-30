@@ -1,6 +1,7 @@
 # backend/main.py
 import os
 import uuid
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Header
@@ -87,9 +88,9 @@ PERSONA_PROMPTS: Dict[str, str] = {
 """,
 }
 
-# -----------------------------
-# 1-B. 링크 + 6자리 교육 코드 (B안)
-# -----------------------------
+# ============================================================
+# 1-B. 링크 + 6자리 교육 코드 (참여자 액세스 제어)
+# ============================================================
 
 # 교육 코드 정보
 class AccessCode(BaseModel):
@@ -197,7 +198,7 @@ async def access_verify(req: AccessVerifyRequest):
     ACCESS_SESSIONS[token] = {
         "company_id": req.company_id,
         "campaign_code": req.campaign_code,
-        "created_at": uuid.uuid1().time,  # 간단한 시간값 (나중에 만료 로직 추가 가능)
+        "created_at": datetime.utcnow().isoformat(),
     }
 
     return AccessVerifyResponse(
@@ -249,9 +250,235 @@ async def admin_deactivate_access(
     raise HTTPException(status_code=404, detail="해당 ID의 교육 코드를 찾을 수 없습니다.")
 
 
-# -----------------------------
-# 2. Gemini 챗 세션 관리
-# -----------------------------
+# ============================================================
+# 2. 관리자용 도메인: 고객사 / 진단 / 페르소나 / 데이터 로그
+# ============================================================
+
+# --- 2-1) 고객사 관리 ---
+class Company(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ""
+    is_active: bool = True
+
+
+COMPANIES: List[Company] = [
+    Company(
+        id="HDHYUNDAI",
+        name="HD현대",
+        description="HD현대 리더십/핵심가치 교육",
+        is_active=True,
+    ),
+    Company(
+        id="LOTTEGL",
+        name="롯데글로벌로지스",
+        description="영업/조직장 리더십 과정",
+        is_active=True,
+    ),
+]
+
+
+class CompanyCreateRequest(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ""
+
+
+class CompanyUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@app.get("/admin/companies", response_model=List[Company])
+async def admin_list_companies(_: bool = Depends(verify_admin)):
+    return COMPANIES
+
+
+@app.post("/admin/companies", response_model=Company)
+async def admin_create_company(
+    req: CompanyCreateRequest,
+    _: bool = Depends(verify_admin),
+):
+    if any(c.id == req.id for c in COMPANIES):
+        raise HTTPException(status_code=400, detail="이미 존재하는 회사 ID 입니다.")
+    company = Company(
+        id=req.id,
+        name=req.name,
+        description=req.description or "",
+        is_active=True,
+    )
+    COMPANIES.append(company)
+    return company
+
+
+@app.put("/admin/companies/{company_id}", response_model=Company)
+async def admin_update_company(
+    company_id: str,
+    req: CompanyUpdateRequest,
+    _: bool = Depends(verify_admin),
+):
+    for c in COMPANIES:
+        if c.id == company_id:
+            if req.name is not None:
+                c.name = req.name
+            if req.description is not None:
+                c.description = req.description
+            if req.is_active is not None:
+                c.is_active = req.is_active
+            return c
+    raise HTTPException(status_code=404, detail="해당 회사 ID를 찾을 수 없습니다.")
+
+
+# --- 2-2) 진단(시뮬레이션/캠페인) 관리 ---
+class Diagnostic(BaseModel):
+    id: str
+    company_id: str
+    name: str
+    description: Optional[str] = ""
+    created_at: str
+    is_active: bool = True
+
+
+DIAGNOSTICS: List[Diagnostic] = []
+
+
+class DiagnosticCreateRequest(BaseModel):
+    company_id: str
+    name: str
+    description: Optional[str] = ""
+
+
+class DiagnosticUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@app.get("/admin/diagnostics", response_model=List[Diagnostic])
+async def admin_list_diagnostics(_: bool = Depends(verify_admin)):
+    return DIAGNOSTICS
+
+
+@app.post("/admin/diagnostics", response_model=Diagnostic)
+async def admin_create_diagnostic(
+    req: DiagnosticCreateRequest,
+    _: bool = Depends(verify_admin),
+):
+    diag = Diagnostic(
+        id=str(uuid.uuid4()),
+        company_id=req.company_id,
+        name=req.name,
+        description=req.description or "",
+        created_at=datetime.utcnow().isoformat(),
+        is_active=True,
+    )
+    DIAGNOSTICS.append(diag)
+    return diag
+
+
+@app.put("/admin/diagnostics/{diag_id}", response_model=Diagnostic)
+async def admin_update_diagnostic(
+    diag_id: str,
+    req: DiagnosticUpdateRequest,
+    _: bool = Depends(verify_admin),
+):
+    for d in DIAGNOSTICS:
+        if d.id == diag_id:
+            if req.name is not None:
+                d.name = req.name
+            if req.description is not None:
+                d.description = req.description
+            if req.is_active is not None:
+                d.is_active = req.is_active
+            return d
+    raise HTTPException(status_code=404, detail="해당 진단 ID를 찾을 수 없습니다.")
+
+
+# --- 2-3) 페르소나 관리 (지금은 read-only + 활성/비활성만) ---
+class PersonaAdmin(BaseModel):
+    key: str          # quiet / idea / social ...
+    name: str         # 화면에 보이는 이름
+    description: str
+    is_active: bool = True
+
+
+PERSONA_ADMIN: List[PersonaAdmin] = [
+    PersonaAdmin(
+        key="quiet",
+        name="조용한 성실형(김서연)",
+        description="신중하고 표현이 적으며 갈등을 피하고 싶어하는 유형",
+        is_active=True,
+    ),
+    PersonaAdmin(
+        key="idea",
+        name="아이디어 폭주형(박지훈)",
+        description="창의적이고 아이디어가 많지만 마감/디테일에 약한 유형",
+        is_active=True,
+    ),
+    PersonaAdmin(
+        key="social",
+        name="관계지향 협력형(이도윤)",
+        description="팀 분위기와 관계를 가장 중요하게 여기는 유형",
+        is_active=True,
+    ),
+]
+
+
+class PersonaUpdateRequest(BaseModel):
+    is_active: Optional[bool] = None
+    description: Optional[str] = None
+
+
+@app.get("/admin/personas", response_model=List[PersonaAdmin])
+async def admin_list_personas(_: bool = Depends(verify_admin)):
+    return PERSONA_ADMIN
+
+
+@app.put("/admin/personas/{persona_key}", response_model=PersonaAdmin)
+async def admin_update_persona(
+    persona_key: str,
+    req: PersonaUpdateRequest,
+    _: bool = Depends(verify_admin),
+):
+    for p in PERSONA_ADMIN:
+        if p.key == persona_key:
+            if req.is_active is not None:
+                p.is_active = req.is_active
+            if req.description is not None:
+                p.description = req.description
+            return p
+    raise HTTPException(status_code=404, detail="해당 페르소나 key를 찾을 수 없습니다.")
+
+
+# --- 2-4) 데이터 축적: 사용자 히스토리(리포트 로그) ---
+class ConversationLog(BaseModel):
+    id: str
+    company_id: str
+    campaign_code: str
+    simulation_id: Optional[str]
+    persona: str
+    created_at: str
+    topic: Optional[str] = None
+    situation: Optional[str] = None
+    last_user_message: Optional[str] = None
+    last_coach_reply: Optional[str] = None
+
+
+CONVERSATION_LOGS: List[ConversationLog] = []
+
+
+@app.get("/admin/logs", response_model=List[ConversationLog])
+async def admin_list_logs(_: bool = Depends(verify_admin)):
+    """
+    단순 조회용: 나중에 pagination / 필터 추가 가능
+    """
+    return CONVERSATION_LOGS
+
+
+# ============================================================
+# 3. Gemini 챗 세션 관리
+# ============================================================
 SESSIONS: Dict[str, "genai.ChatSession"] = {}
 
 
@@ -283,9 +510,9 @@ def get_or_create_session(simulation_id: Optional[str], persona: str):
     return simulation_id, SESSIONS[simulation_id]
 
 
-# -----------------------------
-# 3. Request 모델
-# -----------------------------
+# ============================================================
+# 4. Request / Response 모델 (시뮬레이션 & 리포트)
+# ============================================================
 class ChatRequest(BaseModel):
     message: str
     persona: str
@@ -314,17 +541,17 @@ class ReportRequest(BaseModel):
     lastCoachReply: Optional[str] = ""
 
 
-# -----------------------------
-# 4. 헬스 체크
-# -----------------------------
+# ============================================================
+# 5. 헬스 체크
+# ============================================================
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-# -----------------------------
-# 5. 시뮬레이션 채팅 엔드포인트
-# -----------------------------
+# ============================================================
+# 6. 시뮬레이션 채팅 엔드포인트
+# ============================================================
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, access: AccessContext = Depends(get_current_access)):
     """
@@ -359,9 +586,9 @@ async def chat(req: ChatRequest, access: AccessContext = Depends(get_current_acc
     return ChatResponse(simulation_id=sim_id, reply=reply_text)
 
 
-# -----------------------------
-# 6. 리포트 생성 엔드포인트
-# -----------------------------
+# ============================================================
+# 7. 리포트 생성 엔드포인트 (+ 데이터 로그 저장)
+# ============================================================
 @app.post("/report")
 async def report(req: ReportRequest, access: AccessContext = Depends(get_current_access)):
     """
@@ -458,6 +685,21 @@ async def report(req: ReportRequest, access: AccessContext = Depends(get_current
     improvements_list = bullets_to_list(improvements) or [
         "다음 대화를 위해 2~3개의 구체적인 질문을 미리 준비해보면 좋겠습니다."
     ]
+
+    # 🔴 데이터 축적: 간단 로그 남기기
+    log = ConversationLog(
+        id=str(uuid.uuid4()),
+        company_id=access.company_id,
+        campaign_code=access.campaign_code,
+        simulation_id=None,  # 필요하면 프론트에서 simulation_id도 같이 보내도록 확장
+        persona=req.persona.get("name", ""),
+        created_at=datetime.utcnow().isoformat(),
+        topic=req.topic.get("label"),
+        situation=req.situation.get("title"),
+        last_user_message=req.lastUserMessage or "",
+        last_coach_reply=req.lastCoachReply or "",
+    )
+    CONVERSATION_LOGS.append(log)
 
     return {
         "summary": summary,
